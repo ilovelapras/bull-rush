@@ -1,0 +1,233 @@
+:root {
+  --red: #d8352a;
+  --cream: #fbf3e1;
+  --ink: #2b1d14;
+  --shadow: 0 3px 0 rgba(0, 0, 0, 0.25);
+  font-family: ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color: var(--cream);
+  user-select: none;
+  -webkit-user-select: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.hidden {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* ---- Screens ---- */
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+  pointer-events: auto;
+  background: rgba(40, 20, 10, 0.45);
+  overflow-y: auto;
+}
+
+.screen h1 {
+  margin: 0;
+  font-size: clamp(40px, 12vw, 80px);
+  letter-spacing: 2px;
+  text-shadow:
+    0 4px 0 var(--red),
+    0 8px 0 rgba(0, 0, 0, 0.3);
+}
+
+.screen h2 {
+  margin: 0 0 8px;
+}
+
+.tagline {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.big-button {
+  min-width: 220px;
+  min-height: 64px;
+  padding: 0 32px;
+  font-size: 28px;
+  font-weight: 800;
+  color: white;
+  background: var(--red);
+  border: 3px solid var(--cream);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.small-button {
+  min-height: 48px;
+  padding: 0 24px;
+  font-size: 18px;
+  color: var(--cream);
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--cream);
+  border-radius: 12px;
+}
+
+.help {
+  max-width: 420px;
+  padding: 12px 16px;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 12px;
+}
+
+.help p {
+  margin: 6px 0;
+}
+
+.muted {
+  opacity: 0.75;
+  font-size: 14px;
+}
+
+.result {
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.result-distance {
+  font-size: 56px;
+  font-weight: 800;
+}
+
+.best {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* ---- HUD ---- */
+.hud {
+  position: absolute;
+  inset: 0;
+  padding: 12px;
+  pointer-events: none;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+}
+
+.meter-icon {
+  font-size: 28px;
+}
+
+/* Bull on the left, runner on the right; the green bar is the gap between them. */
+.meter-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 16px;
+  margin-right: 16px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 8px;
+  background: #4ac26b;
+  transition: background 0.2s;
+}
+
+.meter-you {
+  position: absolute;
+  top: 50%;
+  font-size: 26px;
+  transform: translate(-50%, -50%);
+}
+
+.hud.danger .meter-fill {
+  background: var(--red);
+}
+
+.stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 8px;
+}
+
+.stat {
+  font-size: 32px;
+  font-weight: 800;
+}
+
+.stat.small {
+  font-size: 20px;
+}
+
+.flash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 22%;
+  text-align: center;
+  font-size: 36px;
+  font-weight: 800;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.flash.show {
+  opacity: 1;
+  transition: none;
+}
+
+/* ---- Jog buttons ---- */
+.jog-buttons {
+  position: absolute;
+  left: 8px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.jog-title {
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.jog-button {
+  width: 56px;
+  height: 44px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--cream);
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+}
+
+.jog-button.active {
+  color: white;
+  background: var(--red);
+  border-color: white;
+}

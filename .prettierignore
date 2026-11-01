@@ -1,0 +1,7 @@
+node_modules
+dist
+pnpm-lock.yaml
+packages/motion/test/fixtures
+apps/web/public/mediapipe
+apps/web/public/models
+CLAUDE.md
