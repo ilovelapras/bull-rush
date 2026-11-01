@@ -13,7 +13,7 @@ Working title: **Bull Rush**. The theme is deliberately kept separate from the g
 - **Primary device:** a phone or tablet propped up in **portrait** orientation at roughly waist height, with the player standing **2–3 m away** and their whole body in frame. Landscape should still work, but portrait is the design target.
 - **Runs in the mobile browser.** There is no native app or app store build. It must work in current Chrome for Android and Safari for iOS.
 - **The camera requires HTTPS**, including during development on the local network. See §9.1.
-- **Privacy:** camera frames are processed on the device only. Never upload, store or send video or images anywhere. Recorded *landmark* data (numbers only, see §6.6) is a development-only feature and must be off by default.
+- **Privacy:** camera frames are processed on the device only. Never upload, store or send video or images anywhere. Recorded *landmark* data (numbers only, see `docs/motion-detection.md` §11.2) is a development-only feature and must be off by default.
 - **Performance budget:** the game renders at 60 fps (at least 30 fps on mid-range phones), and pose tracking runs at 25 fps or more at the same time. Body movement to on-screen reaction should take **under 150 ms**.
 
 ## 2. Tech stack
@@ -118,6 +118,8 @@ bull-rush/
           Settings.ts                (planned)
           CalibrationGuide.ts        (planned)
           DebugOverlay.ts            (planned)
+          MotionLab.ts               (planned)  // ?lab=1: camera, skeleton, plots, sliders, recording, drills
+          SignalPlot.ts              (planned)  // scrolling signal plot with threshold lines
         audio/                       (planned)
           Audio.ts                   (planned)  // Web Audio wrapper
         styles/
@@ -161,14 +163,16 @@ bull-rush/
         index.ts
         config.ts                    (planned)  // ALL motion thresholds (R1)
         filters.ts                   (planned)  // One Euro filter, EMA helpers
-        BodySignals.ts               (planned)  // landmarks -> normalized body features (6.2). Only place for mirroring (R4)
+        BodySignals.ts               (planned)  // landmarks -> normalized body features (spec §6). Only place for mirroring (R4)
         Calibration.ts               (planned)  // baseline capture + slow adaptive update
         detectors/                   (planned)
           JogDetector.ts             (planned)
           LaneZoneDetector.ts        (planned)
           JumpDetector.ts            (planned)
           SquatDetector.ts           (planned)
+          PresenceDetector.ts        (planned)  // in frame or not; drives auto-pause
         GestureFusion.ts             (planned)  // combines detector outputs -> ordered InputEvents (combos)
+        MotionPipeline.ts            (planned)  // PoseFrame in -> events + jog state out; same path live and in tests
         Recorder.ts                  (planned)  // record landmark streams as JSON, replay as a fake PoseTracker
         synthetic.ts                 (planned)  // synthetic movement generators for tests
       test/                          (planned)
@@ -176,6 +180,7 @@ bull-rush/
   scripts/
     check-file-tree.mjs              // fails if this tree and the real repo disagree
   docs/
+    motion-detection.md              // full camera + motion detection spec (CLAUDE.md §6)
     decisions/                       // short notes on design decisions and tuning results
       README.md
       2026-10-24-chase-model.md      // why the bull uses strikes, benchmarked on Subway Surfers / Temple Run
@@ -230,7 +235,7 @@ interface InputSource {
 }
 ```
 
-Lane events are **absolute** (left, center or right) rather than relative, because lanes map to where the player is standing (§6.4). With absolute targets, a missed or duplicated event can't leave the game permanently out of sync with the player.
+Lane events are **absolute** (left, center or right) rather than relative, because lanes map to where the player is standing (`docs/motion-detection.md` §8.3). With absolute targets, a missed or duplicated event can't leave the game permanently out of sync with the player.
 
 Today (milestone 2) `CombinedInput` in `apps/web` is the `InputSource`: keyboard and touch gestures report relative intents (left, right, jump, roll), and `CombinedInput` is the one place that turns them into absolute lane events. The camera pipeline will become another source with the same output.
 
@@ -247,7 +252,7 @@ If leaderboards, accounts or saved coins are added later:
 
 All values below are **starting points** and belong in `packages/game-core/src/config.ts`.
 
-- `jogIntensity` (0 to 1) comes from the jog detector (§6.3).
+- `jogIntensity` (0 to 1) comes from the jog detector (`docs/motion-detection.md` §8.2).
 - Player speed:
   `vPlayer = jogging ? lerp(V_JOG_MIN=7, V_JOG_MAX=12, jogIntensity) : V_WALK=3` (m/s), smoothed with roughly 0.5 s of easing so the speed doesn't jitter.
 - The world scrolls at `vPlayer`. Jogging faster brings obstacles towards you faster, which is the risk-for-reward trade-off.
@@ -263,73 +268,31 @@ All values below are **starting points** and belong in `packages/game-core/src/c
 
 ## 6. Motion detection
 
-### 6.1 Coordinate rules (read twice)
-- Use MediaPipe's **normalized image landmarks** (not world landmarks, which are centered on the hips and so lose sideways and vertical position). Convert to **pixel space** with the video's width and height before measuring any distance, because x and y are normalized on different scales.
-- The front camera image is mirrored. **All left/right logic is in player space**: when the player moves to *their* right, the character moves right. Do the mirroring in exactly one place (`BodySignals`), back it with a setting, and cover it with a unit test.
-- **Image y points downwards.** Wrap this in helpers like `heightAboveBaseline()` so detector code reads naturally.
-- Normalize every distance by the **calibrated body scale** so thresholds don't depend on how far the player stands from the camera:
-  - `torsoLen`: the distance from the midpoint of the shoulders to the midpoint of the hips.
-  - `shoulderW`: the distance between the shoulders.
+**The full spec is [`docs/motion-detection.md`](docs/motion-detection.md). Read all of it before working on `packages/motion` or `apps/web/src/input/` camera code.** It covers camera setup and framing, the pose model, the latency budget, signal filtering, calibration, every detector with its thresholds and guards, combos, performance on phones, Motion Lab, the recording format and the test targets. The summary below must stay consistent with it; if they disagree, the spec wins and this summary gets fixed.
 
-### 6.2 Body signals (per frame, after One Euro filtering)
-Landmarks used: shoulders 11/12, hips 23/24, knees 25/26, ankles 27/28.
-- `hipX`: the horizontal offset of the hip midpoint from the calibrated center, in units of `shoulderW`, in player space.
-- `hipRise`: how far the hip midpoint is above the standing baseline, in units of `torsoLen` (negative means lower).
-- `hipVy`: the vertical velocity of the hips, in `torsoLen` per second.
-- `hipVx`: the sideways velocity of the hips, in `shoulderW` per second.
-- `kneeLiftL/R`: the height of each knee relative to the hips (used for jogging).
-- `ankleRise`: how far both ankles are above their standing baseline, using the smaller of the two.
-- `kneeAngleL/R`: the hip–knee–ankle angle in degrees.
-- `visible`: true when the key landmarks have visibility of at least 0.5 and the whole body is in frame.
+### 6.1 Non-negotiables (read twice)
+- Pipeline: camera → `PoseTracker` (MediaPipe PoseLandmarker *lite*, in `apps/web`) → `PoseFrame` → `MotionPipeline` in `packages/motion` (BodySignals → Calibration → Detectors → GestureFusion) → `InputEvent`s + jog state → game. **The same `MotionPipeline` runs live and in tests.**
+- Use **normalized image landmarks** converted to **pixels** before measuring. **Mirroring and the y-flip happen only in `BodySignals`** (rule R4).
+- Every distance is in units of the player's **torso length `T`** (calibrated, adapts slowly only while standing or jogging, **frozen** during jumps, squats and lane moves).
+- Timestamps come from the **camera frame** (`requestVideoFrameCallback`), never from when inference finished. Never queue frames (rule R6).
+- **Detect onsets, not peaks.** GestureFusion **never delays** an event to wait for another; it only orders them (lane first) and derives combos.
+- Camera frames never leave the device. Recordings are landmark numbers only.
 
-### 6.3 Calibration
-1. Show a silhouette guide. The player stands still with their whole body visible for **2 s**.
-2. Capture the baseline hip midpoint (x and y), ankle y, `torsoLen` and `shoulderW` by taking the median over that window.
-3. During play, **adapt slowly**: update the baseline and scale with an EMA (time constant about 3 s), *but only* while the detector says "standing" or "jogging" (never while jumping, squatting or changing lanes). This handles the player drifting closer to or further from the camera.
+### 6.2 Moves and the traps to guard against
+| Player does | Game does | Key guard (details in the spec §8–§9) |
+|---|---|---|
+| Jogs on the spot (any style: high knees, heel flicks, shuffle) | Runs; speed follows cadence | Uses foot lift (knee **or** ankle) alternating; minimum lift amplitude |
+| Stands left / center / right | Changes lane | Position uses hips **and** feet (leaning isn't enough); hysteresis; early commit from sideways velocity |
+| Jumps | Jumps | Both feet up together + rise threshold, so jogging bounce never jumps |
+| Squats | Rolls | **Jump wind-up dip** must not roll (80 ms hold, cancelled by upward velocity); **soft landing** must not roll (deeper squat needed just after landing) |
+| Jumps sideways | Lane change, then jump | Lane emitted at take-off from sideways velocity |
+| Hops/steps sideways into a squat | Lane change, then roll | Zone crossing lands before the squat hold ends |
+| Jumps and lands in a squat | Jump, then roll on landing | Landing-window squat rule; game turns it into a dive + roll |
+| Leaves the frame | Pause | Presence detector |
 
-### 6.4 Detectors (starting thresholds; all in `packages/motion/src/config.ts`)
-
-**JogDetector → `jogIntensity`**
-- Detect alternating peaks in `kneeLiftL` and `kneeLiftR` (peak prominence of at least 0.08 `torsoLen`, with left and right alternating).
-- Cadence is the number of alternating peaks in the last 2 s, converted to steps per minute.
-- Jogging counts as active above `CADENCE_MIN=100` spm. `jogIntensity = clamp((cadence-100)/(180-100), 0, 1)`, smoothed with an EMA of about 0.5 s.
-- Ignore the frames inside a jump or squat.
-
-**LaneZoneDetector → `lane` events (position-based)**
-- The lane is decided by **where the player stands**: `hipX < -ENTER(0.8)` is the left lane, `hipX > +ENTER(0.8)` is the right lane, and anything else is the center.
-- Use hysteresis: once in a side lane, the player only returns to center when `|hipX| < EXIT(0.5)`.
-- **Early commit:** if `|hipVx| > LATERAL_V_COMMIT(3.0)` and the projected position 100 ms ahead crosses a boundary, emit the lane change now. This makes sideways jumps and hops feel instant.
-
-**JumpDetector → `jump`**
-- A jump fires on take-off, not at the peak. It requires `hipVy > 1.5`, `hipRise > 0.15` and `ankleRise > 0.10`, with both ankles rising together.
-- Normal jogging bounce is about 0.05–0.08 `torsoLen`, so it must never trigger a jump. A unit test must cover this using the jogging fixtures.
-- A refractory period of 400 ms after landing prevents double jumps.
-
-**SquatDetector → `roll`**
-- A roll fires when `hipRise < -0.25` and both knee angles are below 130°, held for 2 frames or more.
-- It fires when the squat *starts*. The player must be standing again (`hipRise > -0.1`) before another roll can fire.
-- The roll in the game lasts a fixed 0.6 s, no matter how long the player stays squatting.
-
-### 6.5 GestureFusion and combos
-GestureFusion collects detector outputs in a short **fusion window (`FUSION_MS=80`)**. Within one window, lane changes are **always emitted before** jumps and rolls.
-
-| Real-world movement | Game result |
-|---|---|
-| Jog on the spot | Run. Speed follows cadence. |
-| Step left or right into a zone | Change lane |
-| Jump straight up | Jump |
-| Squat | Roll |
-| **Jump sideways** (high rise plus strong sideways velocity at take-off) | Lane change, **then** jump |
-| **Low sideways hop or step landing in a squat** (rise below the jump threshold) | Lane change, **then** roll |
-| Jump, then land in a squat | Jump, then roll on landing (the character drops fast and rolls) |
-
-The vertical-rise threshold is what separates a "sideways jump" from a "sideways hop into a squat". Keep it in config and tune it from recordings.
-
-### 6.6 Recording and replay (essential for development)
-- In debug mode, a Record button saves the filtered landmark stream (timestamps and landmarks only, **no images**) as JSON.
-- `Recorder` (in `packages/motion`) can replay a JSON clip as a fake `PoseTracker`, both in the browser and in Vitest. The record button itself lives in `apps/web`.
-- Keep labelled fixture clips in `packages/motion/test/fixtures/`, for example `jog_slow`, `jog_fast`, `jump_straight`, `jump_left`, `squat`, `hop_right_squat` and `walk_out_of_frame`. Each test asserts the exact sequence of events produced.
-- **Until real recordings exist,** write synthetic generators (`packages/motion/src/synthetic.ts`: sine-wave knee lifts, a parabolic hip rise for jumps, and so on) so the detector logic can be tested. Replace them with real clips as soon as the human provides them.
+### 6.3 Tooling
+- **Motion Lab** (`?lab=1`): camera + skeleton, live signal plots with threshold lines, detector states, event log, fps/latency readouts, **live threshold sliders with export**, record/download, and **guided drills** that produce already-labelled clips.
+- Tests: synthetic generators for every rule and guard first; then fixture tests on recorded drills with targets **≥ 95% detected, ≤ 1 false trigger per minute, median latency ≤ 100 ms**.
 
 ## 7. Game world
 
@@ -364,7 +327,7 @@ The logical obstacle definitions (`game-core/src/ObstacleTypes.ts`) know only th
 - Performance: cap pixelRatio at 1.5, use a single directional light, skip real-time shadows (fake blob shadows instead), use fog, pool all obstacle and street chunks, and share materials.
 
 ## 8. UI
-- **Menu:** title, Play, How to Play (an illustrated card for each move from the table in §6.5), Settings (debug overlay, mirror toggle, sensitivity presets low/normal/high, keyboard mode, sound).
+- **Menu:** title, Play, How to Play (an illustrated card for each move from the table in §6.2), Settings (debug overlay, mirror toggle, sensitivity presets low/normal/high, keyboard mode, sound).
 - **Calibration guide:** silhouette outline, a "move back" or "step into frame" hint, and a lighting warning when landmark visibility is low.
 - **Ready:** "Jog on the spot to start!" with a cadence meter that fills up. Jogging steadily for 1 s starts the run.
 - **HUD:** the chase meter (bull icon to runner icon) along the top, jog-intensity bar, distance, and a brief flash of the detected move (helps players learn the controls).
@@ -383,6 +346,7 @@ The logical obstacle definitions (`game-core/src/ObstacleTypes.ts`) know only th
 - **Touch controls (phone):** swipe left/right to change lane, up to jump, down to roll. The JOG buttons (5 = fastest, STOP = not jogging) set the jog level.
 - **Keyboard controls:** ← → or A/D for lanes (pressing ← in the left lane does nothing), ↑/W/Space to jump, ↓/S/Shift to roll, and 0–5 to set the jog level (0 = not jogging). J sets a medium jog.
 - `?gallery=1` shows every obstacle, the runner and the bull in rows, for checking a theme.
+- `?lab=1` (planned, milestone 3) opens Motion Lab for seeing and tuning motion detection on a phone.
 - *(Planned, milestone 3)* A `?debug=1` URL flag turns on the debug overlay, and `?replay=<fixture>` drives the game from a recorded clip. Neither exists yet.
 
 ### 9.2 Hooks
@@ -418,8 +382,8 @@ Deployment: `.github/workflows/deploy.yml` publishes the `apps/web` build to Git
 ## 11. Milestones (each must be demoable)
 1. **Scaffold:** pnpm workspace with `shared`, `game-core`, `motion` and `apps/web`; strict TypeScript; ESLint boundary rules; Vite + Three.js with HTTPS on the local network; empty scene on a phone; git hooks, `check-file-tree.mjs`, `.claude/settings.json` and CI in place.
 2. **Game core with touch and keyboard controls (done):** lanes, jump, roll, placeholder obstacles, pattern generator, collision, chase model, HUD, game over, menu. *Done when the game is fun to play on a phone with swipes.* The numbers in `game-core/src/config.ts` are first guesses to be tuned by playing on a phone.
-3. **Pose pipeline:** camera, PoseTracker, BodySignals, debug overlay with skeleton and live signals, recorder/replay.
-4. **Calibration + detectors + fusion:** with synthetic tests, plus fixture tests once real clips exist.
+3. **Pose pipeline** (spec §12 steps 3a–3c): camera, PoseTracker, Motion Lab with skeleton and fps, BodySignals, signal plots, recorder/replay, guided drills.
+4. **Calibration + detectors + fusion** (spec §12 steps 4a–4d): framing check, calibration, all detectors and guards against synthetic tests, then tuning on recorded drills (needs the human to record them on their phone), then practice-moves calibration.
 5. **Integration:** camera input drives the game. Menu, Ready ("jog to start"), auto-pause, settings.
 6. **Theme pass:** Running of the Bulls street, poo/hay/bunting/cart meshes, runner and bull, sounds.
 7. **Tuning on a real device:** thresholds, latency, fps, difficulty curve.
